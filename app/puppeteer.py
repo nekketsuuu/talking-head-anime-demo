@@ -22,7 +22,6 @@ from tha.face_morpher import FaceMorpherSpec
 from tha.two_algo_face_rotator import TwoAlgoFaceRotatorSpec
 from util import rgba_to_numpy_image, extract_pytorch_image_from_filelike
 
-
 class PuppeteerApp:
     def __init__(self,
                  master,
@@ -30,7 +29,8 @@ class PuppeteerApp:
                  face_detector,
                  landmark_locator,
                  video_capture,
-                 torch_device: torch.device):
+                 torch_device: torch.device,
+                 bg_color):
         self.master = master
         self.poser = poser
         self.face_detector = face_detector
@@ -38,49 +38,58 @@ class PuppeteerApp:
         self.video_capture = video_capture
         self.torch_device = torch_device
         self.head_pose_solver = HeadPoseSolver()
+        self.bg_color = bg_color
 
         self.master.title("Puppeteer")
         self.master.protocol("WM_DELETE_WINDOW", self.on_closing)
 
-        top_frame = Frame(self.master)
+        self.show_source_image = False
+        self.show_video_capture = False
+        self.show_posed_image = True
+        self.show_load_image = False
+
+        top_frame = Frame(self.master, bg=self.bg_color)
         top_frame.pack()
 
-        if True:
-            source_image_frame = Frame(top_frame, width=256, height=256)
+        if self.show_source_image:
+            source_image_frame = Frame(top_frame, width=256, height=256, bg=self.bg_color)
             source_image_frame.pack_propagate(0)
             source_image_frame.pack(side=LEFT)
 
             self.source_image_label = Label(source_image_frame, text="Nothing yet!")
-            self.source_image_label.pack(fill=BOTH, expand=True)
+            self.source_image_label.pack(fill=BOTH, expand=True, bg=self.bg_color)
 
-        if True:
-            control_frame = Frame(top_frame, width=256, height=192)
+        if self.show_video_capture:
+            control_frame = Frame(top_frame, width=256, height=192, bg=self.bg_color)
             control_frame.pack_propagate(0)
             control_frame.pack(side=LEFT)
 
-            self.video_capture_label = Label(control_frame, text="Nothing yet!")
+            self.video_capture_label = Label(control_frame, text="Nothing yet!", bg=self.bg_color)
             self.video_capture_label.pack(fill=BOTH, expand=True)
 
-        if True:
-            posed_image_frame = Frame(top_frame, width=256, height=256)
+        if self.show_posed_image:
+            posed_image_frame = Frame(top_frame, width=256, height=256, bg=self.bg_color)
             posed_image_frame.pack_propagate(0)
             posed_image_frame.pack(side=LEFT, fill='y')
 
-            self.posed_image_label = Label(posed_image_frame, text="Nothing yet!")
+            self.posed_image_label = Label(posed_image_frame, text="Nothing yet!", bg=self.bg_color)
             self.posed_image_label.pack(fill=BOTH, expand=True)
-
-        bottom_frame = Frame(self.master)
-        bottom_frame.pack(fill='x')
-
-        self.load_source_image_button = Button(bottom_frame, text="Load Image ...", relief=GROOVE,
-                                               command=self.load_image)
-        self.load_source_image_button.pack(fill='x')
 
         self.pose_size = len(self.poser.pose_parameters())
         self.source_image = None
         self.posed_image = None
         self.current_pose = None
         self.last_pose = None
+
+        if self.show_load_image:
+            bottom_frame = Frame(self.master, bg=self.bg_color)
+            bottom_frame.pack(fill='x')
+
+            self.load_source_image_button = Button(bottom_frame, text="Load Image ...", relief=GROOVE,
+                                                   command=self.load_image)
+            self.load_source_image_button.pack(fill='x')
+        else:
+            self.load_image_from_file("data/illust/puppeteer.png")
 
         self.master.after(1000 // 60, self.update_image())
 
@@ -97,9 +106,10 @@ class PuppeteerApp:
             message = "The loaded image has size %dx%d, but we require %dx%d." \
                       % (image.width(), image.height(), self.poser.image_size(), self.poser.image_size())
             messagebox.showerror("Wrong image size!", message)
-        self.source_image_label.configure(image=image, text="")
-        self.source_image_label.image = image
-        self.source_image_label.pack()
+        if self.show_source_image:
+            self.source_image_label.configure(image=image, text="")
+            self.source_image_label.image = image
+            self.source_image_label.pack()
 
         self.source_image = extract_pytorch_image_from_filelike(file_name).to(self.torch_device).unsqueeze(dim=0)
 
@@ -115,15 +125,18 @@ class PuppeteerApp:
             face_rect = faces[0]
             face_landmarks = self.landmark_locator(rgb_frame, face_rect)
             face_box_points, euler_angles = self.head_pose_solver.solve_head_pose(face_landmarks)
-            self.draw_face_landmarks(rgb_frame, face_landmarks)
-            self.draw_face_box(rgb_frame, face_box_points)
+            if self.show_video_capture:
+                self.draw_face_landmarks(rgb_frame, face_landmarks)
+                self.draw_face_box(rgb_frame, face_box_points)
 
         resized_frame = cv2.flip(cv2.resize(rgb_frame, (192, 256)), 1)
         pil_image = PIL.Image.fromarray(resized_frame, mode='RGB')
         photo_image = PIL.ImageTk.PhotoImage(image=pil_image)
-        self.video_capture_label.configure(image=photo_image, text="")
-        self.video_capture_label.image = photo_image
-        self.video_capture_label.pack()
+
+        if self.show_video_capture:
+            self.video_capture_label.configure(image=photo_image, text="")
+            self.video_capture_label.image = photo_image
+            self.video_capture_label.pack()
 
         if euler_angles is not None and self.source_image is not None:
             self.current_pose = torch.zeros(self.pose_size, device=self.torch_device)
@@ -157,9 +170,10 @@ class PuppeteerApp:
             numpy_image = rgba_to_numpy_image(posed_image[0])
             pil_image = PIL.Image.fromarray(np.uint8(np.rint(numpy_image * 255.0)), mode='RGBA')
             photo_image = PIL.ImageTk.PhotoImage(image=pil_image)
-            self.posed_image_label.configure(image=photo_image, text="")
-            self.posed_image_label.image = photo_image
-            self.posed_image_label.pack()
+            if self.show_posed_image:
+                self.posed_image_label.configure(image=photo_image, text="")
+                self.posed_image_label.image = photo_image
+                self.posed_image_label.pack()
 
         self.master.after(1000 // 60, self.update_image)
 
@@ -198,6 +212,9 @@ if __name__ == "__main__":
 
     video_capture = cv2.VideoCapture(0)
 
+    bg_color = '#eebbff'
+
     master = Tk()
-    PuppeteerApp(master, poser, face_detector, landmark_locator, video_capture, cuda)
+    master.configure(bg=bg_color)
+    PuppeteerApp(master, poser, face_detector, landmark_locator, video_capture, cuda, bg_color)
     master.mainloop()
